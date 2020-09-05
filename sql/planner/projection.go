@@ -18,7 +18,7 @@ import (
 type ProjectionNode struct {
 	node
 
-	Expressions []ResultField
+	Expressions []ProjectedField
 	tableName   string
 
 	info *database.TableInfo
@@ -29,7 +29,7 @@ var _ outputNode = (*ProjectionNode)(nil)
 var _ operationNode = (*ProjectionNode)(nil)
 
 // NewProjectionNode creates a ProjectionNode.
-func NewProjectionNode(n Node, expressions []ResultField, tableName string) Node {
+func NewProjectionNode(n Node, expressions []ProjectedField, tableName string) Node {
 	return &ProjectionNode{
 		node: node{
 			op:   Projection,
@@ -57,6 +57,18 @@ func (n *ProjectionNode) Bind(tx *database.Transaction, params []expr.Param) (er
 }
 
 func (n *ProjectionNode) toStream(st document.Stream) (document.Stream, error) {
+	var aggregators []func(d document.Document, fb *document.FieldBuffer) error
+
+	for _, e := range n.Expressions {
+		if agg, ok := e.(Aggregator); ok {
+			aggregators = append(aggregators, agg.Aggregate)
+		}
+	}
+
+	if len(aggregators) > 0 {
+		st = st.Aggregate(aggregators...)
+	}
+
 	if st.IsEmpty() {
 		d := documentMask{
 			resultFields: n.Expressions,
@@ -67,17 +79,19 @@ func (n *ProjectionNode) toStream(st document.Stream) (document.Stream, error) {
 			return st, err
 		}
 
-		return document.NewStream(document.NewIterator(fb)), nil
+		st = document.NewStream(document.NewIterator(fb))
+	} else {
+		var dm documentMask
+		st = st.Map(func(d document.Document) (document.Document, error) {
+			dm.info = n.info
+			dm.r = d
+			dm.resultFields = n.Expressions
+
+			return &dm, nil
+		})
 	}
 
-	var dm documentMask
-	return st.Map(func(d document.Document) (document.Document, error) {
-		dm.info = n.info
-		dm.r = d
-		dm.resultFields = n.Expressions
-
-		return &dm, nil
-	}), nil
+	return st, nil
 }
 
 func (n *ProjectionNode) toResult(st document.Stream) (res query.Result, err error) {
@@ -106,7 +120,7 @@ func (n *ProjectionNode) String() string {
 type documentMask struct {
 	info         *database.TableInfo
 	r            document.Document
-	resultFields []ResultField
+	resultFields []ProjectedField
 }
 
 var _ document.Document = documentMask{}
@@ -149,26 +163,26 @@ func (r documentMask) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// A ResultField is a field that will be part of the result document that will be returned at the end of a Select statement.
-type ResultField interface {
+// A ProjectedField is a field that will be part of the projected document that will be returned at the end of a Select statement.
+type ProjectedField interface {
 	Iterate(stack expr.EvalStack, fn func(field string, value document.Value) error) error
 	Name() string
 }
 
-// ResultFieldExpr turns any expression into a ResultField.
-type ResultFieldExpr struct {
+// ProjectedExpr turns any expression into a ResultField.
+type ProjectedExpr struct {
 	expr.Expr
 
 	ExprName string
 }
 
 // Name returns the raw expression.
-func (r ResultFieldExpr) Name() string {
+func (r ProjectedExpr) Name() string {
 	return r.ExprName
 }
 
 // Iterate evaluates Expr and calls fn once with the result.
-func (r ResultFieldExpr) Iterate(stack expr.EvalStack, fn func(field string, value document.Value) error) error {
+func (r ProjectedExpr) Iterate(stack expr.EvalStack, fn func(field string, value document.Value) error) error {
 	v, err := r.Expr.Eval(stack)
 	if err != nil {
 		return err
@@ -177,7 +191,7 @@ func (r ResultFieldExpr) Iterate(stack expr.EvalStack, fn func(field string, val
 	return fn(r.ExprName, v)
 }
 
-func (r ResultFieldExpr) String() string {
+func (r ProjectedExpr) String() string {
 	return fmt.Sprintf("%s", r.Expr)
 }
 
@@ -200,4 +214,8 @@ func (w Wildcard) Iterate(stack expr.EvalStack, fn func(field string, value docu
 	}
 
 	return stack.Document.Iterate(fn)
+}
+
+type Aggregator interface {
+	Aggregate(d document.Document, fb *document.FieldBuffer) error
 }

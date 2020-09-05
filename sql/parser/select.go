@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+
 	"github.com/genjidb/genji/sql/planner"
 	"github.com/genjidb/genji/sql/query/expr"
 	"github.com/genjidb/genji/sql/scanner"
@@ -57,13 +58,13 @@ func (p *Parser) parseSelectStatement() (*planner.Tree, error) {
 }
 
 // parseResultFields parses the list of result fields.
-func (p *Parser) parseResultFields() ([]planner.ResultField, error) {
+func (p *Parser) parseResultFields() ([]planner.ProjectedField, error) {
 	// Parse first (required) result field.
 	rf, err := p.parseResultField()
 	if err != nil {
 		return nil, err
 	}
-	rfields := []planner.ResultField{rf}
+	rfields := []planner.ProjectedField{rf}
 
 	// Parse remaining (optional) result fields.
 	for {
@@ -81,7 +82,7 @@ func (p *Parser) parseResultFields() ([]planner.ResultField, error) {
 }
 
 // parseResultField parses the list of result fields.
-func (p *Parser) parseResultField() (planner.ResultField, error) {
+func (p *Parser) parseResultField() (planner.ProjectedField, error) {
 	// Check if the * token exists.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == scanner.MUL {
 		return planner.Wildcard{}, nil
@@ -99,7 +100,7 @@ func (p *Parser) parseResultField() (planner.ResultField, error) {
 		lit = fs.String()
 	}
 
-	rf := planner.ResultFieldExpr{Expr: e, ExprName: lit}
+	rf := planner.ProjectedExpr{Expr: e, ExprName: lit}
 
 	// Check if the AS token exists.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == scanner.AS {
@@ -129,7 +130,7 @@ func (p *Parser) parseFrom() (string, bool, error) {
 		return ident, true, pErr
 	}
 
-	return ident, true,  nil
+	return ident, true, nil
 }
 
 func (p *Parser) parseOrderBy() (expr.FieldSelector, scanner.Token, error) {
@@ -189,7 +190,7 @@ type selectConfig struct {
 	OrderByDirection scanner.Token
 	OffsetExpr       expr.Expr
 	LimitExpr        expr.Expr
-	ProjectionExprs  []planner.ResultField
+	ProjectionExprs  []planner.ProjectedField
 }
 
 // ToTree turns the statement into an expression tree.
